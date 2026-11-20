@@ -1,0 +1,33 @@
+server:
+  port: ${SCHEDULER_PORT:8081}
+
+spring:
+  application:
+    name: scheduler
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/jobs}
+    username: ${DB_USER:jobs}
+    password: ${DB_PASSWORD:jobs}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+
+scheduler:
+  poll-interval-ms: 500
+  batch-size: 500
+  queued-lease-seconds: 60
+  reaper-interval-ms: 5000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

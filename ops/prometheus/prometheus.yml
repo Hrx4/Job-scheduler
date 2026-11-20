@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 5s
+
+# Services run on the host (mvn spring-boot:run) during dev.
+# When running with --profile apps, swap targets to api:8080, scheduler:8081, worker:8082.
+scrape_configs:
+  - job_name: api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+  - job_name: scheduler
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+  - job_name: worker
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8082"]

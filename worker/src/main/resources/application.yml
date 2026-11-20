@@ -1,0 +1,36 @@
+server:
+  port: ${WORKER_PORT:8082}
+
+spring:
+  application:
+    name: worker
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/jobs}
+    username: ${DB_USER:jobs}
+    password: ${DB_PASSWORD:jobs}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: workers
+      auto-offset-reset: earliest
+      enable-auto-commit: false   # commit only after the claim succeeds
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: manual
+
+worker:
+  # unique per instance; falls back to hostname inside containers
+  id: ${WORKER_ID:${HOSTNAME:worker-local}}
+  lease-seconds: 30
+  heartbeat-interval-ms: 10000
+  handler-threads: 8
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
