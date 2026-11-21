@@ -33,6 +33,43 @@ Or everything in containers: `docker compose --profile apps up -d --build`.
 | Prometheus | http://localhost:9090   |
 | Grafana    | http://localhost:3000 (admin / admin) |
 
+## API
+
+All `/api/v1/**` calls need `X-API-Key` (default `dev-key`, set with `API_KEYS`).
+
+```bash
+curl -X POST localhost:8080/api/v1/jobs -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: report-4412" \
+  -d '{"type":"GENERATE_REPORT","payload":{"reportId":4412},
+       "schedule":{"kind":"CRON","cron":"0 0 9 * * MON-FRI","timeZone":"Asia/Kolkata"}}'
+```
+
+| Method | Path                             | Notes                                          |
+|--------|----------------------------------|------------------------------------------------|
+| POST   | `/api/v1/jobs`                   | 201 new, 200 same key + body, 409 key reused   |
+| GET    | `/api/v1/jobs/{id}`              | with `latestRun` and `nextRunAt`               |
+| GET    | `/api/v1/jobs?status&type&from&to&cursor&limit` | cursor-paginated, newest first  |
+| GET    | `/api/v1/jobs/{id}/runs`         | runs with attempts                             |
+| POST   | `/api/v1/jobs/{id}/cancel`       | 202                                            |
+| POST   | `/api/v1/jobs/{id}/pause`, `/resume` | recurring jobs only                        |
+| GET    | `/api/v1/dead-letter?type&cursor`| DEAD runs with last error                      |
+| POST   | `/api/v1/runs/{id}/requeue`      | 202, fresh retry budget                        |
+
+Errors: `{ "code", "message", "traceId" }`.
+
+Built-in job types (demo handlers): `SEND_EMAIL` (`to`), `GENERATE_REPORT` (`durationMs`,
+`failUntilAttempt` for testing retries), `HTTP_CALLBACK` (`url`, `body`; sends `Idempotency-Key: <runId>`).
+
+Cron uses Spring's 6-field format: `second minute hour day-of-month month day-of-week`.
+
+## Policies
+
+- **Retries:** delay = min(10 s · 2^(attempt-1), 10 min) + random(0, 10 s). `NonRetryableException` goes straight to DEAD.
+- **Misfires:** if fire times were missed, run once now, then skip to the next future fire time. No backlog.
+- **Resume:** next fire time is computed from now; times missed while paused are skipped.
+- **Requeue:** `attempt_count` never goes down (it is the fencing token). Requeue sets `attempt_base`
+  so the run gets a fresh `maxRetries` budget.
+
 ## Build plan
 
 | Weeks | Build                                                                      | Guarantee                       |

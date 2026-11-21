@@ -11,6 +11,27 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  jackson:
+    default-property-inclusion: non_null
+
+api:
+  keys: ${API_KEYS:dev-key}   # comma-separated
+
+# Weeks 1-2: run jobs inside the API process. Set false once scheduler + worker services run.
+local-worker:
+  enabled: ${LOCAL_WORKER_ENABLED:true}
+  threads: 8
+  poll-interval-ms: 500
+  lease-seconds: 30
+
+jobs:
+  retry:
+    base-ms: 10000
+    cap-ms: 600000
+
+logging:
+  pattern:
+    level: "%5p [trace=%X{traceId:-} run=%X{runId:-}]"
 
 management:
   endpoints:
