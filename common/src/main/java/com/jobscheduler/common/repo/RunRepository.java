@@ -115,6 +115,25 @@ public class RunRepository {
     }
 
     /**
+     * Worker step: claim one run delivered by Kafka. QUEUED -> RUNNING, lease to this worker, attempt + 1.
+     * Empty result = someone else has it, it was cancelled, or this is a duplicate delivery: skip the message.
+     * The new attempt_count is the fencing token for every later write by this worker.
+     */
+    public Optional<JobRun> claimQueued(UUID runId, String workerId, int leaseSeconds) {
+        var p = new MapSqlParameterSource()
+                .addValue("id", runId)
+                .addValue("worker", workerId)
+                .addValue("lease", leaseSeconds);
+        return jdbc.query("""
+                UPDATE job_run SET status = 'RUNNING', lease_owner = :worker,
+                       lease_expires_at = now() + make_interval(secs => :lease),
+                       attempt_count = attempt_count + 1, version = version + 1
+                WHERE id = :id AND status = 'QUEUED'
+                RETURNING *
+                """, p, MAPPER).stream().findFirst();
+    }
+
+    /**
      * Claims due runs straight from PENDING to RUNNING for an in-process worker (no Kafka).
      * SKIP LOCKED lets several pollers run at once without taking the same row.
      * Runs of PAUSED or CANCELLED jobs are skipped.

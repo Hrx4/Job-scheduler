@@ -14,17 +14,26 @@ spring:
       group-id: workers
       auto-offset-reset: earliest
       enable-auto-commit: false   # commit only after the claim succeeds
+      max-poll-records: 50
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
       ack-mode: manual
 
 worker:
-  # unique per instance; falls back to hostname inside containers
-  id: ${WORKER_ID:${HOSTNAME:worker-local}}
+  id: ${WORKER_ID:}            # blank = hostname; a random suffix is always added
+  consumers: 3                 # Kafka consumer threads; total across workers is capped by 12 partitions
+  handler-threads: 8           # jobs running at once in this instance
   lease-seconds: 30
-  heartbeat-interval-ms: 10000
-  handler-threads: 8
+
+jobs:
+  retry:
+    base-ms: 10000
+    cap-ms: 600000
+
+logging:
+  pattern:
+    level: "%5p [run=%X{runId:-}]"
 
 management:
   endpoints:

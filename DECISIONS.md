@@ -24,6 +24,7 @@ One entry per decision, written when it is made. Each answers: problem, options,
 | 014 | Idempotency key stores a request hash; reuse with a different body is 409 | Accepted |
 | 015 | Plain JDBC (`NamedParameterJdbcTemplate`), not JPA | Accepted |
 | 016 | Kafka message carries only the `runId` | Accepted |
+| 017 | Worker: claim on the consumer thread, run on a handler pool, nack when full | Accepted |
 
 ---
 
@@ -157,3 +158,10 @@ One entry per decision, written when it is made. Each answers: problem, options,
 - **Reasoning:** a full message is a second copy of the state that can go stale. Between publish and consume, the job may be cancelled or the run re-queued by the reaper. The worker must re-read Postgres to claim the run anyway (ADR-001, ADR-002), so extra fields add nothing but drift.
 - **Decision:** key = value = `runId`. Keying by `runId` spreads runs evenly over the 12 partitions.
 - **Trade-off:** one extra Postgres read per run on the worker. If that read ever shows up as the bottleneck (ADR-011), revisit by adding immutable fields (type, payload) to the message.
+
+### ADR-017: Worker claims on the consumer thread, runs on a handler pool, nacks when full
+- **Context:** jobs can run for minutes (timeout up to 24 h). A Kafka consumer that stops calling `poll()` for longer than `max.poll.interval.ms` (5 min) is kicked from the group, and that triggers a rebalance storm.
+- **Options:** (a) run the handler on the consumer thread; (b) hand off to a pool and block when the pool is full; (c) hand off to a pool and `nack` the record when the pool is full.
+- **Reasoning:** (a) and (b) both stop polling while long jobs run. With (c) the consumer thread only does fast work (claim + offset commit), so it never stalls. When all handler threads are busy, it claims nothing and `nack`s. Kafka redelivers that record about 200 ms later, and Postgres state never changes.
+- **Decision:** (c). Order per message: free slot? → claim (`QUEUED → RUNNING`) → commit offset → run on the pool. The offset is committed only after the claim. If the worker crashes before the claim, the message is redelivered. If it crashes after, the run's lease expires.
+- **Trade-off:** a full worker keeps re-reading the same records, which is wasted polls but no wrong state. In-flight runs no longer pin a partition, so one instance can run more jobs than it has partitions. Handler-thread count vs consumer count is tuned in ADR-011.
