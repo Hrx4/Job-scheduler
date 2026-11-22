@@ -91,6 +91,30 @@ public class RunRepository {
     }
 
     /**
+     * Scheduler step: moves due runs PENDING -> QUEUED so they can be published to Kafka.
+     * The lease on QUEUED covers the dual-write gap: if the publish never happens, the reaper
+     * returns the run to PENDING after the lease expires.
+     * SKIP LOCKED lets several scheduler instances poll at once without taking the same row.
+     */
+    public List<JobRun> queueDue(int leaseSeconds, int limit) {
+        var p = new MapSqlParameterSource()
+                .addValue("lease", leaseSeconds)
+                .addValue("limit", limit);
+        return jdbc.query("""
+                UPDATE job_run SET status = 'QUEUED', lease_owner = NULL,
+                       lease_expires_at = now() + make_interval(secs => :lease),
+                       version = version + 1
+                WHERE id IN (
+                    SELECT r.id FROM job_run r JOIN job j ON j.id = r.job_id
+                    WHERE r.status = 'PENDING' AND r.next_attempt_at <= now() AND j.status = 'ACTIVE'
+                    ORDER BY r.priority, r.next_attempt_at
+                    LIMIT :limit
+                    FOR UPDATE OF r SKIP LOCKED)
+                RETURNING *
+                """, p, MAPPER);
+    }
+
+    /**
      * Claims due runs straight from PENDING to RUNNING for an in-process worker (no Kafka).
      * SKIP LOCKED lets several pollers run at once without taking the same row.
      * Runs of PAUSED or CANCELLED jobs are skipped.

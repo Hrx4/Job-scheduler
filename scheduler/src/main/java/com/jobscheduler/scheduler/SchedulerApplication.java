@@ -8,7 +8,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-@SpringBootApplication
+/** Scans only the parts of common it needs: repositories and cron planning, not handlers. */
+@SpringBootApplication(scanBasePackages = {
+        "com.jobscheduler.scheduler",
+        "com.jobscheduler.common.repo",
+        "com.jobscheduler.common.schedule"})
 @EnableScheduling
 public class SchedulerApplication {
 

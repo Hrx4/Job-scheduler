@@ -23,6 +23,7 @@ One entry per decision, written when it is made. Each answers: problem, options,
 | 013 | `attempt_base` instead of resetting `attempt_count` on requeue | Accepted |
 | 014 | Idempotency key stores a request hash; reuse with a different body is 409 | Accepted |
 | 015 | Plain JDBC (`NamedParameterJdbcTemplate`), not JPA | Accepted |
+| 016 | Kafka message carries only the `runId` | Accepted |
 
 ---
 
@@ -149,3 +150,10 @@ One entry per decision, written when it is made. Each answers: problem, options,
 - **Reasoning:** the correctness of the system lives in those exact SQL statements, and the rows-affected count is the signal ("0 rows = fenced off"). An ORM hides both.
 - **Decision:** hand-written SQL in `common/repo`.
 - **Trade-off:** more boilerplate (row mappers, dynamic filter SQL). No lazy loading or dirty checking, which we do not want here anyway.
+
+### ADR-016: Kafka message carries only the `runId`
+- **Context:** the scheduler publishes each queued run for workers.
+- **Options:** send the full job (type, payload, attempt) in the message; or send only `runId`.
+- **Reasoning:** a full message is a second copy of the state that can go stale. Between publish and consume, the job may be cancelled or the run re-queued by the reaper. The worker must re-read Postgres to claim the run anyway (ADR-001, ADR-002), so extra fields add nothing but drift.
+- **Decision:** key = value = `runId`. Keying by `runId` spreads runs evenly over the 12 partitions.
+- **Trade-off:** one extra Postgres read per run on the worker. If that read ever shows up as the bottleneck (ADR-011), revisit by adding immutable fields (type, payload) to the message.
