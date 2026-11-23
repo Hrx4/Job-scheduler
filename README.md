@@ -14,9 +14,35 @@ Stack: Java 21, Spring Boot 3, PostgreSQL, Kafka, Redis, Docker Compose, Prometh
 | `scheduler` | Polls due runs (SKIP LOCKED) → Kafka, reaper, cron next-run  | 8081 |
 | `worker`    | Consumes runs, claims, runs handler, heartbeats, fencing     | 8082 |
 
+## How a job flows
+
+```
+client ──POST──▶ api ──insert job + run (PENDING)──▶ Postgres
+                                                        │
+scheduler (every 500 ms, SKIP LOCKED) ◀─────────────────┘
+   PENDING → QUEUED (60 s lease), plan next cron run
+   └──publish runId──▶ Kafka "jobs" (12 partitions)
+                          │
+worker (consumer group) ◀─┘
+   claim QUEUED → RUNNING (30 s lease, attempt + 1) → commit offset
+   run handler → SUCCEEDED | PENDING + backoff (scheduler retries) | DEAD
+```
+
 ## Run locally
 
-Needs JDK 21 and Docker.
+Needs JDK 21 and Docker. Host ports: Postgres **5433**, Redis **6380** (so they do not clash with
+other local projects), Kafka 9092.
+
+**Everything in containers** (API, scheduler, 2 workers + infra):
+
+```bash
+docker compose --profile apps up -d --build
+docker compose --profile apps up -d --scale worker=4      # more workers
+powershell -File scripts/smoke-test.ps1                   # 100 jobs end to end, checks no duplicates
+docker compose --profile apps down                        # stop (add -v to wipe the database)
+```
+
+**Services from Maven** (for debugging), infra in Docker:
 
 ```bash
 docker compose up -d                       # postgres, kafka, redis, prometheus, grafana
@@ -26,12 +52,15 @@ mvn -pl scheduler spring-boot:run
 mvn -pl worker spring-boot:run
 ```
 
-Or everything in containers: `docker compose --profile apps up -d --build`.
+`LOCAL_WORKER_ENABLED=true` makes the API run jobs in-process with no scheduler, Kafka or worker.
+That is the weeks 1–2 mode, and the API tests use it.
 
 | UI         | URL                     |
 |------------|-------------------------|
-| Prometheus | http://localhost:9090   |
+| Prometheus | http://localhost:9090 (scrapes services run from Maven on the host) |
 | Grafana    | http://localhost:3000 (admin / admin) |
+
+Design decisions and measured results: [DECISIONS.md](DECISIONS.md).
 
 ## API
 
@@ -74,8 +103,8 @@ Cron uses Spring's 6-field format: `second minute hour day-of-month month day-of
 
 | Weeks | Build                                                                      | Guarantee                       |
 |-------|----------------------------------------------------------------------------|---------------------------------|
-| 1–2   | API, three tables (Flyway), single in-process worker, Docker Compose       | Jobs durable and queryable      |
-| 3–4   | Scheduler poller (SKIP LOCKED), Kafka, many workers, retries, DEAD state   | Survive failures, scale out     |
+| 1–2 ✅ | API, three tables (Flyway), single in-process worker, Docker Compose       | Jobs durable and queryable      |
+| 3–4 ✅ | Scheduler poller (SKIP LOCKED), Kafka, many workers, retries, DEAD state   | Survive failures, scale out     |
 | 5–6   | Claim + fencing, heartbeats, reaper, timeouts; Redis lock variant          | No double run, crash recovery   |
 | 7     | Cron, misfire policy, pause/resume, idempotency keys; Testcontainers tests | Recurring jobs, safe retries    |
 | 8     | Metrics, Grafana dashboard, k6 load test, chaos test                       | Measured numbers                |

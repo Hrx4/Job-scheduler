@@ -5,7 +5,7 @@ spring:
   application:
     name: worker
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/jobs}
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/jobs}
     username: ${DB_USER:jobs}
     password: ${DB_PASSWORD:jobs}
   kafka:
@@ -19,6 +19,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
       ack-mode: manual
+      # After a nack (worker full) the consumer is paused and only resumes when poll() returns.
+      # The default 5 s timeout left free threads idle for ~5 s; see DECISIONS.md ADR-017.
+      poll-timeout: 200ms
 
 worker:
   id: ${WORKER_ID:}            # blank = hostname; a random suffix is always added

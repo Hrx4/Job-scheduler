@@ -30,6 +30,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
+                "local-worker.enabled=true", // API tests run jobs in-process, no Kafka needed
                 "local-worker.poll-interval-ms=100",
                 "jobs.retry.base-ms=50",
                 "jobs.retry.cap-ms=200"

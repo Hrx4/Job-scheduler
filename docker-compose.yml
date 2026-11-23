@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: jobs
       POSTGRES_USER: jobs
       POSTGRES_PASSWORD: jobs
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]   # host 5433 so it does not clash with other local Postgres
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jobs -d jobs"]
@@ -39,7 +39,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["6380:6379"]   # host 6380 so it does not clash with other local Redis
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -67,6 +67,11 @@ services:
       KAFKA_BOOTSTRAP: kafka:29092
     depends_on:
       postgres: { condition: service_healthy }
+    healthcheck:   # healthy = Flyway migrations done and the app is serving
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health > /dev/null || exit 1"]
+      interval: 5s
+      retries: 24
+      start_period: 10s
 
   scheduler:
     profiles: [apps]
@@ -76,7 +81,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
-      api: { condition: service_started }   # api runs Flyway
+      api: { condition: service_healthy }   # wait for the schema
 
   worker:
     profiles: [apps]
@@ -85,6 +90,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      api: { condition: service_healthy }   # wait for the schema
     deploy:
       replicas: 2   # scale with: docker compose --profile apps up -d --scale worker=4
 

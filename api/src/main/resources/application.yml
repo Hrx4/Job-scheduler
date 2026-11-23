@@ -5,7 +5,7 @@ spring:
   application:
     name: api
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/jobs}
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/jobs}
     username: ${DB_USER:jobs}
     password: ${DB_PASSWORD:jobs}
   flyway:
@@ -17,9 +17,10 @@ spring:
 api:
   keys: ${API_KEYS:dev-key}   # comma-separated
 
-# Weeks 1-2: run jobs inside the API process. Set false once scheduler + worker services run.
+# Off by default: scheduler + worker services run jobs. Set true to run jobs inside the API
+# process with no Kafka (handy for quick local dev and the API tests).
 local-worker:
-  enabled: ${LOCAL_WORKER_ENABLED:true}
+  enabled: ${LOCAL_WORKER_ENABLED:false}
   threads: 8
   poll-interval-ms: 500
   lease-seconds: 30
