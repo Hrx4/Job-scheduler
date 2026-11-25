@@ -20,6 +20,8 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -41,10 +43,14 @@ public class RunExecutor {
     private final Backoff backoff;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
+    private final int leaseSeconds;
+    private final long heartbeatNanos;
     private final ExecutorService handlerPool = Executors.newVirtualThreadPerTaskExecutor();
 
     public RunExecutor(JobRepository jobs, RunRepository runs, AttemptRepository attempts,
-                       HandlerRegistry handlers, Backoff backoff, ObjectMapper mapper, TransactionTemplate tx) {
+                       HandlerRegistry handlers, Backoff backoff, ObjectMapper mapper, TransactionTemplate tx,
+                       @Value("${jobs.lease-seconds:30}") int leaseSeconds,
+                       @Value("${jobs.heartbeat-interval-ms:10000}") long heartbeatIntervalMs) {
         this.jobs = jobs;
         this.runs = runs;
         this.attempts = attempts;
@@ -52,6 +58,8 @@ public class RunExecutor {
         this.backoff = backoff;
         this.mapper = mapper;
         this.tx = tx;
+        this.leaseSeconds = leaseSeconds;
+        this.heartbeatNanos = TimeUnit.MILLISECONDS.toNanos(heartbeatIntervalMs);
     }
 
     public void execute(JobRun run, String workerId) {
@@ -60,14 +68,19 @@ public class RunExecutor {
             Job job = jobs.findById(run.jobId())
                     .orElseThrow(() -> new IllegalStateException("Job not found: " + run.jobId()));
             long attemptId = attempts.start(run.id(), run.attemptCount(), workerId);
-            Result result = invoke(job, run);
+            Result result = invoke(job, run, workerId);
             tx.executeWithoutResult(s -> complete(job, run, workerId, attemptId, result));
         } finally {
             MDC.remove("runId");
         }
     }
 
-    private Result invoke(Job job, JobRun run) {
+    /**
+     * Waits for the handler in heartbeat-sized slices. After each slice:
+     * past the job timeout → TIMED_OUT; otherwise extend the lease, and if this worker no longer
+     * owns the run (cancelled, or lease taken over) → interrupt the handler, ABANDONED.
+     */
+    private Result invoke(Job job, JobRun run, String workerId) {
         Future<?> future;
         try {
             JobHandler handler = handlers.get(job.type());
@@ -79,18 +92,41 @@ public class RunExecutor {
         } catch (Exception e) {
             return Result.failed(e);
         }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(job.timeoutSeconds());
         try {
-            future.get(job.timeoutSeconds(), TimeUnit.SECONDS);
-            return Result.SUCCESS;
-        } catch (TimeoutException e) {
-            future.cancel(true);
-            return new Result(AttemptOutcome.TIMED_OUT, "Timed out after " + job.timeoutSeconds() + " s", true);
+            while (true) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    future.cancel(true);
+                    return new Result(AttemptOutcome.TIMED_OUT, "Timed out after " + job.timeoutSeconds() + " s", true);
+                }
+                try {
+                    future.get(Math.min(remaining, heartbeatNanos), TimeUnit.NANOSECONDS);
+                    return Result.SUCCESS;
+                } catch (TimeoutException slice) {
+                    if (System.nanoTime() < deadline && !heartbeat(run, workerId)) {
+                        future.cancel(true);
+                        return new Result(AttemptOutcome.ABANDONED,
+                                "Stopped: run was cancelled or its lease was taken over", false);
+                    }
+                }
+            }
         } catch (ExecutionException e) {
             return Result.failed(e.getCause());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
             return new Result(AttemptOutcome.FAILED, "Worker interrupted", true);
+        }
+    }
+
+    /** True = still ours. A DB error counts as still ours: retry next beat; the lease covers 3 missed beats. */
+    private boolean heartbeat(JobRun run, String workerId) {
+        try {
+            return runs.extendLease(run.id(), workerId, run.attemptCount(), leaseSeconds);
+        } catch (DataAccessException e) {
+            log.warn("Heartbeat failed, will retry: {}", e.getMessage());
+            return true;
         }
     }
 

@@ -23,9 +23,10 @@ local-worker:
   enabled: ${LOCAL_WORKER_ENABLED:false}
   threads: 8
   poll-interval-ms: 500
-  lease-seconds: 30
 
 jobs:
+  lease-seconds: 30            # claim lease; each heartbeat pushes it this far ahead
+  heartbeat-interval-ms: 10000
   retry:
     base-ms: 10000
     cap-ms: 600000

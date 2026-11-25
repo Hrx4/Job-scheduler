@@ -46,7 +46,7 @@ public class RunListener {
     private final ExecutorService pool;
 
     public RunListener(RunRepository runs, RunExecutor executor, WorkerIdentity identity, MeterRegistry meters,
-                       @Value("${worker.lease-seconds:30}") int leaseSeconds,
+                       @Value("${jobs.lease-seconds:30}") int leaseSeconds,
                        @Value("${worker.handler-threads:8}") int handlerThreads) {
         this.runs = runs;
         this.executor = executor;

@@ -158,6 +158,23 @@ public class RunRepository {
     }
 
     /**
+     * Heartbeat: push the lease forward while the handler runs. Same fencing WHERE as completion.
+     * Returns false if this worker no longer owns the attempt (run cancelled, or lease expired and
+     * someone else took over): the caller must stop the handler.
+     */
+    public boolean extendLease(UUID runId, String workerId, int attempt, int leaseSeconds) {
+        var p = new MapSqlParameterSource()
+                .addValue("id", runId)
+                .addValue("worker", workerId)
+                .addValue("attempt", attempt)
+                .addValue("lease", leaseSeconds);
+        return jdbc.update("""
+                UPDATE job_run SET lease_expires_at = now() + make_interval(secs => :lease)
+                WHERE id = :id AND status = 'RUNNING' AND lease_owner = :worker AND attempt_count = :attempt
+                """, p) == 1;
+    }
+
+    /**
      * Fenced completion: only succeeds if this worker still owns this attempt.
      * Returns false if the lease was lost or the run was cancelled; the caller must discard its result.
      *

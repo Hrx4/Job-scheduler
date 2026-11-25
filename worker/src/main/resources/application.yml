@@ -27,9 +27,10 @@ worker:
   id: ${WORKER_ID:}            # blank = hostname; a random suffix is always added
   consumers: 3                 # Kafka consumer threads; total across workers is capped by 12 partitions
   handler-threads: 8           # jobs running at once in this instance
-  lease-seconds: 30
 
 jobs:
+  lease-seconds: 30            # claim lease; each heartbeat pushes it this far ahead
+  heartbeat-interval-ms: 10000 # 3 beats per lease, so one or two missed beats are survivable
   retry:
     base-ms: 10000
     cap-ms: 600000

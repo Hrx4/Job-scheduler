@@ -32,6 +32,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         properties = {
                 "local-worker.enabled=true", // API tests run jobs in-process, no Kafka needed
                 "local-worker.poll-interval-ms=100",
+                "jobs.lease-seconds=2",            // short lease + fast heartbeat so tests run in seconds
+                "jobs.heartbeat-interval-ms=300",
                 "jobs.retry.base-ms=50",
                 "jobs.retry.cap-ms=200"
         })
@@ -119,6 +121,36 @@ class JobApiTest {
         await().atMost(10, SECONDS).until(() -> latestRun(jobId).path("status").asText().equals("DEAD"));
         JsonNode attempt = get("/api/v1/jobs/" + jobId + "/runs").getBody().get(0).get("attempts").get(0);
         assertThat(attempt.get("outcome").asText()).isEqualTo("TIMED_OUT");
+    }
+
+    @Test
+    void heartbeatKeepsLeaseAliveForJobLongerThanTheLease() {
+        // 4 s job, 2 s lease: without heartbeats the lease would expire mid-run.
+        String jobId = post("/api/v1/jobs", null, """
+                {"type": "GENERATE_REPORT", "payload": {"durationMs": 4000}}""").getBody().get("jobId").asText();
+
+        await().atMost(10, SECONDS).until(() -> latestRun(jobId).path("status").asText().equals("RUNNING"));
+        Instant firstLease = Instant.parse(firstRun(jobId).get("leaseExpiresAt").asText());
+        await().atMost(3, SECONDS).until(() ->
+                Instant.parse(firstRun(jobId).get("leaseExpiresAt").asText()).isAfter(firstLease));
+
+        await().atMost(10, SECONDS).until(() -> latestRun(jobId).path("status").asText().equals("SUCCEEDED"));
+        assertThat(firstRun(jobId).get("attempts")).hasSize(1);
+    }
+
+    @Test
+    void cancellingRunningJobStopsItAtNextHeartbeat() {
+        String jobId = post("/api/v1/jobs", null, """
+                {"type": "GENERATE_REPORT", "payload": {"durationMs": 30000}, "timeoutSeconds": 60}""")
+                .getBody().get("jobId").asText();
+        await().atMost(10, SECONDS).until(() -> latestRun(jobId).path("status").asText().equals("RUNNING"));
+
+        post("/api/v1/jobs/" + jobId + "/cancel", null, null);
+
+        // Stopped within ~1 heartbeat (300 ms), not after the 30 s job or 60 s timeout.
+        await().atMost(3, SECONDS).until(() ->
+                firstRun(jobId).get("attempts").get(0).path("outcome").asText().equals("ABANDONED"));
+        assertThat(firstRun(jobId).get("status").asText()).isEqualTo("CANCELLED");
     }
 
     @Test
@@ -215,6 +247,10 @@ class JobApiTest {
 
     private JsonNode latestRun(String jobId) {
         return get("/api/v1/jobs/" + jobId).getBody().path("latestRun");
+    }
+
+    private JsonNode firstRun(String jobId) {
+        return get("/api/v1/jobs/" + jobId + "/runs").getBody().get(0);
     }
 
     private int succeededRuns(String jobId) {

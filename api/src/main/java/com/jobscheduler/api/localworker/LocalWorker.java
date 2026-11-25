@@ -43,7 +43,7 @@ public class LocalWorker {
     public LocalWorker(RunRepository runs, JobRepository jobs, NextRunPlanner planner, RunExecutor executor,
                        TransactionTemplate tx,
                        @Value("${local-worker.threads:8}") int threads,
-                       @Value("${local-worker.lease-seconds:30}") int leaseSeconds) {
+                       @Value("${jobs.lease-seconds:30}") int leaseSeconds) {
         this.runs = runs;
         this.jobs = jobs;
         this.planner = planner;

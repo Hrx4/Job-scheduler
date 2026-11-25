@@ -25,6 +25,7 @@ One entry per decision, written when it is made. Each answers: problem, options,
 | 015 | Plain JDBC (`NamedParameterJdbcTemplate`), not JPA | Accepted |
 | 016 | Kafka message carries only the `runId` | Accepted |
 | 017 | Worker: claim on the consumer thread, run on a handler pool, nack when full | Accepted |
+| 018 | Heartbeat doubles as the cancel checkpoint; lost ownership interrupts the handler | Accepted |
 
 ---
 
@@ -169,4 +170,12 @@ One entry per decision, written when it is made. Each answers: problem, options,
   - With Spring Kafka's default `poll-timeout` of 5 s, attempts started in waves of 16 exactly 5 s apart. All 101 took about 30 s, and the last job's start delay was 35 s. Cause: after a `nack`, the paused consumer only resumes when `poll()` returns, and `poll()` waits its full timeout.
   - With `spring.kafka.listener.poll-timeout: 200ms`, all 101 started within about 3 s of submit (warm workers). Max start delay was 2.1 s, which is just the queue for 16 slots during the burst.
   - Lesson: a `nack`-when-full design needs a short poll timeout. The cost is more empty polls while idle.
-  - Also seen: right after the workers restart, the first jobs waited about 11 s. That was the consumer group rebalance, not steady-state behaviour. It matters for ADR-009 (recovery time) and for rolling deploys.
+  - Also seen (again on 2026-11-23: cold p50 6.9 s / p99 10 s, then warm p50 0.82 s / p99 2.26 s): right after the workers restart, the first jobs waited about 11 s. That was the consumer group rebalance, not steady-state behaviour. It matters for ADR-009 (recovery time) and for rolling deploys.
+
+### ADR-018: Heartbeat doubles as the cancel checkpoint
+- **Context:** a lease (ADR-004) must stay alive while a long job runs, and FR-4 says a cancelled running job must stop "at the next checkpoint".
+- **Options:** (a) a separate scheduled heartbeat thread per worker that extends every lease it holds; (b) the thread already waiting on the handler wakes every heartbeat interval and extends this run's lease; (c) handlers poll an `isCancelled()` flag themselves.
+- **Reasoning:** (b) needs no shared registry of in-flight runs, and it reuses the fenced `WHERE lease_owner = ? AND attempt_count = ?`. When that update matches 0 rows, the run is no longer ours: it was cancelled (cancel clears the owner) or the lease was taken over. One query answers both "keep alive" and "should I stop?". (c) relies on every handler author remembering to check.
+- **Decision:** `RunExecutor` waits on the handler in heartbeat-sized slices. After each slice it either times out (`TIMED_OUT`), extends the lease, or interrupts the handler and records `ABANDONED`. A DB error during a heartbeat counts as "still ours" and is retried next beat. With 30 s lease / 10 s beat, two missed beats are survivable.
+- **Trade-off:** stopping relies on the handler responding to interrupts. Blocking I/O that ignores interrupts keeps running, but its result is still discarded by the fenced completion. Cancel latency is up to one heartbeat interval (10 s). The lease and heartbeat values are tuned in ADR-009.
+- **Verified:** with a 2 s lease and 300 ms beat, a 4 s job kept its lease (`lease_expires_at` moved forward) and succeeded with 1 attempt. Cancelling a running 30 s job recorded `ABANDONED` within 3 s (`JobApiTest`).
