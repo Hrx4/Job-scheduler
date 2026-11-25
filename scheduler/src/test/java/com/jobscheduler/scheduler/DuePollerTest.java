@@ -32,7 +32,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 
-@SpringBootTest(properties = "scheduler.poll-interval-ms=100")
+@SpringBootTest(properties = {"scheduler.poll-interval-ms=100", "scheduler.reaper-interval-ms=200"})
 @Testcontainers(disabledWithoutDocker = true)
 @Import(DuePollerTest.Containers.class)
 class DuePollerTest {

@@ -39,6 +39,7 @@ other local projects), Kafka 9092.
 docker compose --profile apps up -d --build
 docker compose --profile apps up -d --scale worker=4      # more workers
 powershell -File scripts/smoke-test.ps1                   # 100 jobs end to end, checks no duplicates
+powershell -File scripts/chaos-kill-worker.ps1            # kill a worker mid-job, time crash recovery
 docker compose --profile apps down                        # stop (add -v to wipe the database)
 ```
 

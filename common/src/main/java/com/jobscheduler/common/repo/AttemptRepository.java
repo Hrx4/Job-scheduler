@@ -51,6 +51,7 @@ public class AttemptRepository {
         return id;
     }
 
+    /** First writer wins: if the reaper already closed this attempt, a late worker does not overwrite it. */
     public void finish(long attemptId, AttemptOutcome outcome, String error) {
         var p = new MapSqlParameterSource()
                 .addValue("id", attemptId)
@@ -59,7 +60,21 @@ public class AttemptRepository {
                 .addValue("error", error, Types.VARCHAR);
         jdbc.update("""
                 UPDATE job_attempt SET finished_at = :finished, outcome = :outcome, error = :error
-                WHERE id = :id
+                WHERE id = :id AND finished_at IS NULL
+                """, p);
+    }
+
+    /** Reaper: close the attempt of a worker that stopped heartbeating. */
+    public void markLeaseExpired(UUID runId, int attemptNo, String workerId) {
+        var p = new MapSqlParameterSource()
+                .addValue("run", runId)
+                .addValue("no", attemptNo)
+                .addValue("finished", Times.now())
+                .addValue("outcome", AttemptOutcome.LEASE_EXPIRED.name())
+                .addValue("error", "Lease expired: worker " + workerId + " stopped heartbeating");
+        jdbc.update("""
+                UPDATE job_attempt SET finished_at = :finished, outcome = :outcome, error = :error
+                WHERE run_id = :run AND attempt_no = :no AND finished_at IS NULL
                 """, p);
     }
 

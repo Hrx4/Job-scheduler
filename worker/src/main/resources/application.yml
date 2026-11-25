@@ -15,6 +15,11 @@ spring:
       auto-offset-reset: earliest
       enable-auto-commit: false   # commit only after the claim succeeds
       max-poll-records: 50
+      properties:
+        # How fast Kafka notices a crashed worker and moves its partitions. Default 45 s made the
+        # re-queued run wait for that rebalance: crash-to-rerun was ~44 s. See DECISIONS.md ADR-009.
+        session.timeout.ms: 10000
+        heartbeat.interval.ms: 3000
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:

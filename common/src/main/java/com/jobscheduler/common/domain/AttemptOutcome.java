@@ -6,5 +6,7 @@ public enum AttemptOutcome {
     FAILED,
     TIMED_OUT,
     /** Worker stopped the handler because it no longer owned the run: cancelled, or lease lost. */
-    ABANDONED
+    ABANDONED,
+    /** Worker stopped heartbeating (crashed or stalled); the reaper closed the attempt. */
+    LEASE_EXPIRED
 }

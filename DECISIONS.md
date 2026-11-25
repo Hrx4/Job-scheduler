@@ -16,7 +16,7 @@ One entry per decision, written when it is made. Each answers: problem, options,
 | 006 | Misfire policy: run once, then skip to next fire time | Accepted |
 | 007 | Postgres lease vs Redis lock | Open: needs experiment |
 | 008 | Polling interval and batch size | Open: needs experiment |
-| 009 | Lease length and heartbeat interval | Open: needs experiment |
+| 009 | Lease length and heartbeat interval | In progress: first data in, lease length still open |
 | 010 | One topic vs a topic per priority | Open: needs experiment |
 | 011 | Kafka partitions vs worker count | Open: needs experiment |
 | 012 | Default job timeout | Open: needs experiment |
@@ -100,9 +100,18 @@ One entry per decision, written when it is made. Each answers: problem, options,
 - **Experiment:** kill a worker mid-job, then shorten the lease.
 - **Measure:** time until the job reruns; false takeovers of slow but healthy jobs.
 - **How to decide:** a short lease gives faster recovery but more false takeovers and heartbeat writes. Pick the balance.
-- **Data:** _TBD_
-- **Decision:** _TBD_
-- **Trade-off:** _TBD_
+- **Data (2026-11-26, laptop, Docker Compose, 2 workers, `scripts/chaos-kill-worker.ps1`):** SIGKILL the worker right after it claims a 60 s job. Lease 30 s, heartbeat 10 s, reaper every 5 s. Times use the database clock and are accurate to about 1 s.
+
+  | Kafka `session.timeout.ms` | Kill → reaped | Reaped → rerun | Total, 3 trials |
+  |---|---|---|---|
+  | 45 s (default) | 30.3 / 30.8 / 32.0 s | 14.0 / 12.7 / 11.9 s | **44.3 / 43.5 / 43.9 s** |
+  | 10 s | 29.7 / 29.9 / 32.0 s | 1.0 / 0.1 / 0.7 s | **30.7 / 30.0 / 32.7 s** |
+
+  - **Finding:** the lease was not the first bottleneck. The re-queued message is keyed by `runId`, so it lands on the dead worker's partition. It waits there until Kafka notices the dead consumer (`session.timeout.ms`) and rebalances. Total ≈ kill + 45 s matched the default timeout.
+  - All 6 trials: attempt 1 was closed as `LEASE_EXPIRED` and attempt 2 ran on the surviving worker. No duplicate attempts.
+- **Decision so far:** worker `session.timeout.ms = 10000`, `heartbeat.interval.ms = 3000`.
+- **Still open:** recovery is now bounded by the lease itself, about 30–35 s against the target of "< 30 s". Meeting it needs a shorter lease, for example 20 s with a 5 s heartbeat. That is the second half of this experiment: measure recovery *and* false takeovers of slow-but-healthy jobs before choosing.
+- **Trade-off (session timeout):** a 10 s session means a worker frozen for more than 10 s (long GC, a paused VM) is dropped from the group and its partitions move. That is safe, because the run's lease and fencing still decide who owns the run. But it causes extra rebalances on a flaky network.
 
 ### ADR-010: One topic vs a topic per priority
 - **Experiment:** build a low-priority backlog, then submit high-priority jobs.

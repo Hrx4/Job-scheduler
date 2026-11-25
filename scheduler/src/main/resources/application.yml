@@ -22,6 +22,7 @@ scheduler:
   batch-size: 500
   queued-lease-seconds: 60
   reaper-interval-ms: 5000
+  reaper-batch-size: 500
 
 management:
   endpoints:

@@ -195,6 +195,48 @@ public class RunRepository {
                 """.formatted(setNext), p) == 1;
     }
 
+    /** A run the reaper took back: what it was, what it is now, and who held it. */
+    public record ReapedRun(UUID runId, UUID jobId, RunStatus from, RunStatus to, String previousOwner,
+                            int attemptCount) {
+    }
+
+    /**
+     * Reaper: runs whose lease expired go back to PENDING (due now), so the normal scheduler path
+     * re-queues them.
+     * <ul>
+     *   <li>QUEUED + expired: the Kafka publish was lost, or no worker claimed it. No attempt was used.</li>
+     *   <li>RUNNING + expired: the worker died or stalled past its lease. That attempt counts; if it was
+     *       the last one allowed, the run goes to DEAD instead.</li>
+     * </ul>
+     * SKIP LOCKED lets every scheduler instance run the reaper safely.
+     */
+    public List<ReapedRun> reapExpired(int limit) {
+        return jdbc.query("""
+                WITH expired AS (
+                    SELECT r.id, r.status, r.lease_owner, r.attempt_count, r.attempt_base, j.max_retries
+                    FROM job_run r JOIN job j ON j.id = r.job_id
+                    WHERE r.status IN ('QUEUED', 'RUNNING') AND r.lease_expires_at < now()
+                    ORDER BY r.lease_expires_at
+                    LIMIT :limit
+                    FOR UPDATE OF r SKIP LOCKED)
+                UPDATE job_run r SET
+                       status = CASE WHEN e.status = 'RUNNING' AND e.attempt_count - e.attempt_base > e.max_retries
+                                     THEN 'DEAD' ELSE 'PENDING' END,
+                       next_attempt_at = now(), lease_owner = NULL, lease_expires_at = NULL,
+                       version = r.version + 1
+                FROM expired e
+                WHERE r.id = e.id
+                RETURNING r.id, r.job_id, e.status AS from_status, r.status AS to_status,
+                          e.lease_owner AS previous_owner, r.attempt_count
+                """, Map.of("limit", limit), (rs, i) -> new ReapedRun(
+                rs.getObject("id", UUID.class),
+                rs.getObject("job_id", UUID.class),
+                RunStatus.valueOf(rs.getString("from_status")),
+                RunStatus.valueOf(rs.getString("to_status")),
+                rs.getString("previous_owner"),
+                rs.getInt("attempt_count")));
+    }
+
     /** DEAD -> PENDING with a fresh retry budget. attempt_count is kept: it is the fencing token. */
     public boolean requeueDead(UUID runId) {
         return jdbc.update("""
