@@ -40,6 +40,8 @@ docker compose --profile apps up -d --build
 docker compose --profile apps up -d --scale worker=4      # more workers
 powershell -File scripts/smoke-test.ps1                   # 100 jobs end to end, checks no duplicates
 powershell -File scripts/chaos-kill-worker.ps1            # kill a worker mid-job, time crash recovery
+mvn -pl worker test -Dtest=LockBenchmarkTest -Dbenchmark=true -Dsurefire.failIfNoSpecifiedTests=false
+                                                          # Postgres lease vs Redis lock (ADR-007)
 docker compose --profile apps down                        # stop (add -v to wipe the database)
 ```
 
@@ -106,6 +108,6 @@ Cron uses Spring's 6-field format: `second minute hour day-of-month month day-of
 |-------|----------------------------------------------------------------------------|---------------------------------|
 | 1–2 ✅ | API, three tables (Flyway), single in-process worker, Docker Compose       | Jobs durable and queryable      |
 | 3–4 ✅ | Scheduler poller (SKIP LOCKED), Kafka, many workers, retries, DEAD state   | Survive failures, scale out     |
-| 5–6   | Claim + fencing, heartbeats, reaper, timeouts; Redis lock variant          | No double run, crash recovery   |
+| 5–6 ✅ | Claim + fencing, heartbeats, reaper, timeouts; Redis lock variant          | No double run, crash recovery   |
 | 7     | Cron, misfire policy, pause/resume, idempotency keys; Testcontainers tests | Recurring jobs, safe retries    |
 | 8     | Metrics, Grafana dashboard, k6 load test, chaos test                       | Measured numbers                |

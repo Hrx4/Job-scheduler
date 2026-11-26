@@ -14,7 +14,7 @@ One entry per decision, written when it is made. Each answers: problem, options,
 | 004 | Lease with expiry, not a lock held until the job ends | Accepted |
 | 005 | Several schedulers polling with SKIP LOCKED, no leader | Accepted |
 | 006 | Misfire policy: run once, then skip to next fire time | Accepted |
-| 007 | Postgres lease vs Redis lock | Open: needs experiment |
+| 007 | Postgres lease vs Redis lock | Accepted (measured): keep Postgres |
 | 008 | Polling interval and batch size | Open: needs experiment |
 | 009 | Lease length and heartbeat interval | In progress: first data in, lease length still open |
 | 010 | One topic vs a topic per priority | Open: needs experiment |
@@ -84,9 +84,24 @@ One entry per decision, written when it is made. Each answers: problem, options,
 - **Experiment:** the same load test (e.g. 100k jobs) with each strategy.
 - **Measure:** throughput, p99 claim latency, duplicate executions.
 - **How to decide:** keep Postgres unless it misses the target load. Note the load where you would switch.
-- **Data:** _TBD_
-- **Decision:** _TBD_
-- **Trade-off:** _TBD_
+- **Design note:** Postgres is the source of truth (ADR-001), so every claim must write `RUNNING` to Postgres anyway. A Redis lock therefore cannot replace the Postgres write. It can only come in front of it. So the benchmark measures the lock step alone *and* the full claim.
+- **Setup (2026-11-26, laptop, Testcontainers Postgres 16 + Redis 7, `LockBenchmarkTest`):** 20,000 QUEUED runs, each delivered twice in random order (like Kafka redelivery), 24 threads racing. Duplicate = a run claimed more than once. Round 1 was warm-up (cold JIT and Redis connection), so the table shows rounds 2 and 3.
+
+  | Variant | Deliveries/s | p50 claim | p99 claim | Duplicates |
+  |---|---|---|---|---|
+  | Postgres lease: one conditional `UPDATE` (lock + state) | 10,895 / 11,809 | 1.92 / 1.74 ms | 6.75 / 7.09 ms | 0 / 0 |
+  | Redis `SET NX PX` only (lock step alone) | 17,058 / 17,602 | 1.35 / 1.31 ms | 2.69 / 2.58 ms | 0 / 0 |
+  | Redis lock + Postgres state write (full Redis design) | 10,739 / 9,051 | 2.05 / 2.32 ms | 5.79 / 7.76 ms | 0 / 0 |
+  | Same, with Redis keys wiped every 20 ms ("failover lost the lock") | 5,668 / 5,370 | 3.15 / 3.20 ms | 12.43 / 14.26 ms | 19,915 / 19,935 |
+
+- **Reading it:**
+  - The Redis lock *step* is about 55% faster (≈17.3k vs ≈11.4k/s) with a ~2.6× lower p99.
+  - The full Redis design is about 13% *slower* than the Postgres lease (≈9.9k vs ≈11.4k/s). It makes two round trips (Redis, then Postgres) where Postgres needs one.
+  - Losing the lock let almost every run be claimed twice, because the Redis design has no second guard. The 20 ms wipe is an extreme rate chosen to expose the mechanism, not a realistic failover rate. The point is that the Postgres lease cannot lose its lock separately from its state.
+- **Decision:** keep the Postgres lease. Per the rule set in advance: the target is 500 jobs/s, and the Postgres claim handles ~11k/s on a laptop, about 20× headroom.
+- **When to switch:** not at any claim rate. Even far above target, Redis + Postgres was slower. Revisit only if job state moves out of Postgres. Then the Redis lock would stand alone, and it would need fencing tokens to be safe.
+- **Trade-off:** claim throughput is limited by Postgres writes. Adding a `status = 'QUEUED'` guard to the Redis design would stop the duplicates, but then it is just the Postgres lease plus an extra Redis round trip.
+- **Rerun:** `mvn -pl worker test -Dtest=LockBenchmarkTest -Dbenchmark=true -Dsurefire.failIfNoSpecifiedTests=false`
 
 ### ADR-008: Polling interval and batch size
 - **Experiment:** interval 100 ms / 500 ms / 2 s × batch 50 / 500 / 2000.

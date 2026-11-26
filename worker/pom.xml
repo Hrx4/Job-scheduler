@@ -65,6 +65,12 @@
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Redis client for the lock benchmark (ADR-007) -->
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- In production the API service runs migrations; in tests the worker applies them itself. -->
         <dependency>
             <groupId>org.flywaydb</groupId>
